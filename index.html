@@ -234,7 +234,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sa
           <div class="logo-txt"><h1>Mis Finanzas</h1><div class="bal" id="sidebar-balance">S/ 0.00</div></div>
         </div>
       </div>
-      <div class="urow"><img class="uavatar" id="user-avatar" src="" alt=""><span class="uname" id="user-name">Usuario</span></div>
+      <div class="urow"><div class="uavatar" id="user-avatar-wrap" style="display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--blue);background:var(--blue-l);flex-shrink:0">?</div><span class="uname" id="user-name">Usuario</span></div>
       <div class="nav-grp">Principal</div>
       <div class="nav-item active" data-page="dashboard"><i class="ti ti-layout-dashboard"></i>Dashboard</div>
       <div class="nav-item" data-page="transactions"><i class="ti ti-arrows-exchange"></i>Transacciones</div>
@@ -492,8 +492,26 @@ async function loadProfile(){
   try{
     await gapi.client.load('oauth2','v2');
     const r=await gapi.client.oauth2.userinfo.get();
-    document.getElementById('user-name').textContent=r.result.name||r.result.email;
-    document.getElementById('user-avatar').src=r.result.picture||'';
+    const name=r.result.name||r.result.email||'Usuario';
+    document.getElementById('user-name').textContent=name;
+    const wrap=document.getElementById('user-avatar-wrap');
+    const initials=name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+    if(r.result.picture){
+      const img=new Image();
+      img.onload=()=>{
+        wrap.innerHTML='';
+        wrap.style.background='none';
+        wrap.style.padding='0';
+        const i=document.createElement('img');
+        i.src=r.result.picture;
+        i.style.cssText='width:28px;height:28px;border-radius:50%;object-fit:cover;display:block';
+        wrap.appendChild(i);
+      };
+      img.onerror=()=>{wrap.textContent=initials;};
+      img.src=r.result.picture;
+    } else {
+      wrap.textContent=initials;
+    }
   }catch(e){}
 }
 function signOut(){
@@ -1172,3 +1190,4 @@ window.onload=()=>initGoogle();
 </script>
 </body>
 </html>
+
