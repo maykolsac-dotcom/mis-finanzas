@@ -581,8 +581,12 @@ document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',(
 function getTotals(){
   const inc=transactions.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
   const exp=transactions.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
-  const debt=debts.filter(d=>!d.paid).reduce((s,d)=>s+(d.total-d.paidAmt),0);
-  return{income:inc,expense:exp,balance:inc-exp,debtTotal:debt};
+  // Dinero prestado suma al disponible; lo ya pagado resta
+  const debtReceived=debts.reduce((s,d)=>s+d.total,0);
+  const debtPaid=debts.reduce((s,d)=>s+d.paidAmt,0);
+  const debtPending=debts.filter(d=>!d.paid).reduce((s,d)=>s+Math.max(0,d.total-d.paidAmt),0);
+  const balance=inc-exp+(debtReceived-debtPaid);
+  return{income:inc,expense:exp,balance,debtReceived,debtPaid,debtPending};
 }
 
 function renderAlerts(){
@@ -612,17 +616,18 @@ function renderAlerts(){
 
 // ── DASHBOARD ──
 function renderDashboard(){
-  const{income,expense,balance,debtTotal}=getTotals();
+  const{income,expense,balance,debtReceived,debtPaid,debtPending}=getTotals();
   const now=new Date();
   document.getElementById('dash-sub').textContent='Resumen · '+now.toLocaleDateString('es-PE',{month:'long',year:'numeric'});
   document.getElementById('sidebar-balance').textContent=fmt(balance);
-  // Savings rate
+  // Tasa de ahorro = (ingresos propios - gastos) / ingresos propios
+  // Solo sobre ingresos reales, no incluye préstamos (dinero prestado no es ahorro propio)
   const savRate=income>0?Math.max(0,Math.round(((income-expense)/income)*100)):0;
   document.getElementById('dash-metrics').innerHTML=`
-    <div class="mc"><div class="lbl"><i class="ti ti-arrow-up" style="color:var(--green)"></i>Ingresos</div><div class="val" style="color:var(--green)">${fmt(income)}</div></div>
+    <div class="mc"><div class="lbl"><i class="ti ti-arrow-up" style="color:var(--green)"></i>Ingresos propios</div><div class="val" style="color:var(--green)">${fmt(income)}</div></div>
     <div class="mc"><div class="lbl"><i class="ti ti-arrow-down" style="color:var(--red)"></i>Gastos</div><div class="val" style="color:var(--red)">${fmt(expense)}</div></div>
-    <div class="mc"><div class="lbl"><i class="ti ti-wallet" style="color:var(--blue)"></i>Balance</div><div class="val" style="color:${balance>=0?'var(--green)':'var(--red)'}">${fmt(balance)}</div></div>
-    <div class="mc"><div class="lbl"><i class="ti ti-credit-card" style="color:var(--orange)"></i>Deuda total</div><div class="val" style="color:var(--orange)">${fmt(debtTotal)}</div></div>
+    <div class="mc"><div class="lbl"><i class="ti ti-wallet" style="color:var(--blue)"></i>Disponible</div><div class="val" style="color:${balance>=0?'var(--green)':'var(--red)'}">${fmt(balance)}</div><div class="sub" style="font-size:10px;color:var(--t3)">incl. préstamos recibidos</div></div>
+    <div class="mc"><div class="lbl"><i class="ti ti-credit-card" style="color:var(--orange)"></i>Por devolver</div><div class="val" style="color:var(--orange)">${fmt(debtPending)}</div><div class="sub" style="font-size:10px;color:var(--t3)">deuda pendiente</div></div>
     <div class="mc"><div class="lbl"><i class="ti ti-piggy-bank" style="color:var(--purple)"></i>Tasa de ahorro</div><div class="val" style="color:var(--purple)">${savRate}%</div></div>
   `;
   renderAlerts();
@@ -701,6 +706,7 @@ function saveTx(){
   if(document.getElementById('page-habits').classList.contains('active'))renderHabits();
   if(document.getElementById('page-budget').classList.contains('active'))renderBudget();
   if(document.getElementById('page-calendar').classList.contains('active'))renderCalendar();
+  if(document.getElementById('page-reports').classList.contains('active'))renderReports();
   sched();toast('Transacción guardada');
 }
 function deleteTx(id){
@@ -708,6 +714,10 @@ function deleteTx(id){
   transactions=transactions.filter(t=>t.id!==id);
   renderDashboard();
   if(document.getElementById('page-transactions').classList.contains('active'))renderTxPage();
+  if(document.getElementById('page-habits').classList.contains('active'))renderHabits();
+  if(document.getElementById('page-budget').classList.contains('active'))renderBudget();
+  if(document.getElementById('page-reports').classList.contains('active'))renderReports();
+  if(document.getElementById('page-calendar').classList.contains('active'))renderCalendar();
   sched();toast('Transacción eliminada');
 }
 
@@ -773,18 +783,20 @@ function renderCalendar(){
   const rem=(7-((firstDay+daysInMonth)%7))%7;
   for(let i=1;i<=rem;i++)html+=`<div class="calday other"><div class="caldn">${i}</div></div>`;
   document.getElementById('cal-grid').innerHTML=html;
-  if(calSelected)calSelectDay(calSelected,true);else document.getElementById('cal-detail').innerHTML='';
+  if(calSelected)renderCalDetail(calSelected);else document.getElementById('cal-detail').innerHTML='';
   calStats();
 }
-function calSelectDay(ds,noToggle=false){
-  if(calSelected===ds&&!noToggle){calSelected=null;document.getElementById('cal-detail').innerHTML='';renderCalendar();return;}
-  calSelected=ds;renderCalendar();
+function renderCalDetail(ds){
   const byDate={};
   transactions.forEach(t=>{if(!byDate[t.date])byDate[t.date]={income:0,expense:0,items:[]};byDate[t.date][t.type]+=t.amount;byDate[t.date].items.push(t);});
   const data=byDate[ds];
   const el=document.getElementById('cal-detail');
   if(!data){el.innerHTML=`<div class="caldet"><div class="cald-title">${ds}</div><p style="font-size:13px;color:var(--t3)">Sin movimientos este día.</p></div>`;return;}
   el.innerHTML=`<div class="caldet"><div class="cald-title">${ds} · <span style="color:var(--green)">+${fmt(data.income)}</span> <span style="color:var(--red)">-${fmt(data.expense)}</span></div><div class="txl">${data.items.map(txRow).join('')}</div></div>`;
+}
+function calSelectDay(ds,noToggle=false){
+  if(calSelected===ds&&!noToggle){calSelected=null;document.getElementById('cal-detail').innerHTML='';renderCalendar();return;}
+  calSelected=ds;renderCalendar();
 }
 function calStats(){
   const prefix=`${calYear}-${String(calMonth+1).padStart(2,'0')}`;
@@ -823,7 +835,7 @@ function saveDebt(){
   const due=document.getElementById('debt-due').value;
   if(!name||!total){toast('Completa acreedor y monto','err');return;}
   debts.push({id:Date.now(),name,type,total,paidAmt,interest,desc,start,due,paid:paidAmt>=total});
-  closeDebtModal();renderDebts();sched();toast('Deuda registrada');
+  closeDebtModal();renderDebts();renderDashboard();sched();toast('Deuda registrada');
 }
 function setDebtTab(tab,el){debtTab=tab;document.querySelectorAll('#page-debts .tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');renderDebts();}
 function renderDebts(){
@@ -869,11 +881,20 @@ function debtRow(d){
     </div>`:`<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><span style="font-size:12px;color:var(--green)"><i class="ti ti-check"></i> Pagada</span><button class="delbtn" onclick="deleteDebt(${d.id})"><i class="ti ti-trash"></i></button></div>`}
   </div>`;
 }
-function openPayModal(id){currentDebtId=id;const d=debts.find(x=>x.id===id);document.getElementById('pay-title').textContent='Pago a '+d.name;document.getElementById('pay-amount').value='';document.getElementById('pay-remaining').textContent='Pendiente: '+fmt(d.total-d.paidAmt);document.getElementById('pay-modal').classList.add('open');}
+function openPayModal(id){
+  currentDebtId=id;
+  const d=debts.find(x=>x.id===id);
+  const rem=Math.max(0,d.total-d.paidAmt);
+  document.getElementById('pay-title').textContent='Pago a '+d.name;
+  document.getElementById('pay-amount').value='';
+  document.getElementById('pay-amount').max=rem;
+  document.getElementById('pay-remaining').textContent='Pendiente: '+fmt(rem)+' · Puedes pagar hasta '+fmt(rem);
+  document.getElementById('pay-modal').classList.add('open');
+}
 function closePayModal(){document.getElementById('pay-modal').classList.remove('open');}
-function confirmPay(){const amt=parseFloat(document.getElementById('pay-amount').value)||0;if(!amt||amt<=0){toast('Ingresa un monto válido','err');return;}const d=debts.find(x=>x.id===currentDebtId);d.paidAmt=Math.min(d.total,d.paidAmt+amt);if(d.paidAmt>=d.total)d.paid=true;closePayModal();renderDebts();sched();toast('Pago registrado');}
-function markPaid(id){const d=debts.find(x=>x.id===id);d.paidAmt=d.total;d.paid=true;renderDebts();sched();toast('¡Deuda liquidada!');}
-function deleteDebt(id){if(!confirm('¿Eliminar esta deuda?'))return;debts=debts.filter(d=>d.id!==id);renderDebts();sched();}
+function confirmPay(){const amt=parseFloat(document.getElementById('pay-amount').value)||0;if(!amt||amt<=0){toast('Ingresa un monto válido','err');return;}const d=debts.find(x=>x.id===currentDebtId);d.paidAmt=Math.min(d.total,d.paidAmt+amt);if(d.paidAmt>=d.total)d.paid=true;closePayModal();renderDebts();renderDashboard();sched();toast('Pago registrado');}
+function markPaid(id){const d=debts.find(x=>x.id===id);d.paidAmt=d.total;d.paid=true;renderDebts();renderDashboard();sched();toast('¡Deuda liquidada!');}
+function deleteDebt(id){if(!confirm('¿Eliminar esta deuda?'))return;debts=debts.filter(d=>d.id!==id);renderDebts();renderDashboard();sched();}
 
 // ── HABITS ──
 function renderHabits(){
@@ -961,7 +982,7 @@ function renderBudget(){
   document.getElementById('budget-metrics').innerHTML=`
     <div class="mc"><div class="lbl"><i class="ti ti-target" style="color:var(--blue)"></i>Presupuesto</div><div class="val" style="color:var(--blue)">${fmt(totalBgt)}</div><div class="sub">este mes</div></div>
     <div class="mc"><div class="lbl"><i class="ti ti-receipt" style="color:var(--red)"></i>Gastado</div><div class="val" style="color:var(--red)">${fmt(totalSpent)}</div></div>
-    <div class="mc"><div class="lbl"><i class="ti ti-piggy-bank" style="color:${rem>=0?'var(--green)':'var(--red)'}"></i>Disponible</div><div class="val" style="color:${rem>=0?'var(--green)':'var(--red)'}">${fmt(rem)}</div></div>
+    <div class="mc"><div class="lbl"><i class="ti ti-piggy-bank" style="color:${rem>=0?'var(--green)':'var(--red)'}"></i>Restante del presupuesto</div><div class="val" style="color:${rem>=0?'var(--green)':'var(--red)'}">${fmt(rem)}</div></div>
     ${overCats.length?`<div class="mc"><div class="lbl"><i class="ti ti-alert-circle" style="color:var(--red)"></i>Excedidas</div><div class="val" style="color:var(--red)">${overCats.length}</div><div class="sub">categoría(s)</div></div>`:''}
   `;
   document.getElementById('budget-list').innerHTML=ECATS.filter(cat=>budgets[cat]>0).map(cat=>{
@@ -985,7 +1006,7 @@ function renderBudgetChart(spent){
 
 // ── REPORTS ──
 function renderReports(){
-  const{income,expense,balance}=getTotals();
+  const{income,expense,balance,debtPending}=getTotals();
   const expC=transactions.filter(t=>t.type==='expense').length;
   const avgE=expC?expense/expC:0;
   const savRate=income>0?Math.max(0,Math.round(((income-expense)/income)*100)):0;
@@ -1006,9 +1027,24 @@ function renderReports(){
   renderLineChart();renderCatProgress();renderMonthlySummary();
 }
 function renderLineChart(){
+  // Incluye préstamos recibidos (en start) y pagos de deuda en la línea de saldo
   const byDate={};
-  transactions.slice().sort((a,b)=>a.date.localeCompare(b.date)).forEach(t=>{if(!byDate[t.date])byDate[t.date]=0;byDate[t.date]+=(t.type==='income'?1:-1)*t.amount;});
-  let run=0;const labels=Object.keys(byDate).slice(-30);const data=labels.map(d=>{run+=byDate[d];return parseFloat(run.toFixed(2));});
+  transactions.slice().sort((a,b)=>a.date.localeCompare(b.date)).forEach(t=>{
+    if(!byDate[t.date])byDate[t.date]=0;
+    byDate[t.date]+=(t.type==='income'?1:-1)*t.amount;
+  });
+  // Agregar eventos de deuda al timeline
+  debts.forEach(d=>{
+    if(d.start){if(!byDate[d.start])byDate[d.start]=0;byDate[d.start]+=d.total;} // dinero recibido
+  });
+  // Los pagos de deuda ya están implícitos en paidAmt acumulado; no se pueden fechar individualmente
+  // pero el balance final sí los refleja via getTotals
+  let run=0;const allDates=Object.keys(byDate).sort();const labels=allDates.slice(-30);
+  // recalculate run from start so the last 30 are correct
+  let preRun=0;
+  allDates.slice(0,Math.max(0,allDates.length-30)).forEach(d=>preRun+=byDate[d]);
+  run=preRun;
+  const data=labels.map(d=>{run+=byDate[d];return parseFloat(run.toFixed(2));});
   if(lineChart)lineChart.destroy();
   lineChart=new Chart(document.getElementById('chartLine').getContext('2d'),{
     type:'line',data:{labels:labels.length?labels:['Hoy'],datasets:[{label:'Saldo',data:data.length?data:[0],borderColor:'#0A84FF',backgroundColor:'rgba(10,132,255,0.08)',fill:true,tension:0.4,pointRadius:3,pointBackgroundColor:'#0A84FF'}]},
@@ -1153,7 +1189,7 @@ function toggleExport(){document.getElementById('export-dropdown').classList.tog
 document.addEventListener('click',e=>{if(!e.target.closest('.export-menu'))document.getElementById('export-dropdown').classList.remove('open');});
 function exportCSV(){
   const headers=['ID','Tipo','Monto','Descripción','Fecha','Categoría','Nota'];
-  const rows=transactions.map(t=>[t.id,t.type,t.amount,`"${t.desc.replace(/"/g,'""')}"`,t.date,t.cat,`"${(t.note||'').replace(/"/g,'""')}"`]);
+  const rows=transactions.map(t=>[t.id,t.type,parseFloat(t.amount).toFixed(2),`"${t.desc.replace(/"/g,'""')}"`,t.date,t.cat,`"${(t.note||'').replace(/"/g,'""')}"`]);
   const csv=[headers.join(','),...rows.map(r=>r.join(','))].join('\n');
   downloadFile('mis-finanzas-'+today()+'.csv','text/csv',csv);
   toast('CSV exportado');
@@ -1190,4 +1226,3 @@ window.onload=()=>initGoogle();
 </script>
 </body>
 </html>
-
